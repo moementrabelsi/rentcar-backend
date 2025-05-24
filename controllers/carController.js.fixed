@@ -1,0 +1,379 @@
+const Car = require('../models/Car');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const mongoose = require('mongoose');
+const ObjectId = mongoose.Types.ObjectId;
+
+// Configure multer for image upload
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadPath = process.env.UPLOAD_PATH || 'uploads';
+    
+    // Create main uploads directory if it doesn't exist
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    
+    // Create a subdirectory for the car based on its name
+    let carName = req.body.name || req.body.make + '-' + req.body.model;
+    
+    // Sanitize the car name to make it suitable for a directory name
+    carName = carName.replace(/[^a-zA-Z0-9-_]/g, '_').toLowerCase();
+    
+    // Add timestamp to ensure uniqueness
+    const carDirName = `${carName}-${Date.now()}`;
+    const carUploadPath = path.join(uploadPath, carDirName);
+    
+    // Store the car directory name for later use in the request
+    req.carDirName = carDirName;
+    
+    // Create the car-specific directory
+    if (!fs.existsSync(carUploadPath)) {
+      fs.mkdirSync(carUploadPath, { recursive: true });
+    }
+    
+    cb(null, carUploadPath);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'photo-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: process.env.MAX_FILE_SIZE
+  },
+  fileFilter: function (req, file, cb) {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image files are allowed!'), false);
+    }
+    cb(null, true);
+  }
+}).array('photos', 5); // Allow up to 5 photos
+
+// Create a new car
+exports.createCar = async (req, res) => {
+  try {
+    upload(req, res, async function(err) {
+      if (err instanceof multer.MulterError) {
+        return res.status(400).json({
+          status: 'error',
+          message: err.message
+        });
+      } else if (err) {
+        return res.status(400).json({
+          status: 'error',
+          message: err.message
+        });
+      }
+
+      // Get file paths and transform them to be relative to uploads directory
+      const photos = req.files ? req.files.map(file => {
+        // Store relative path instead of absolute path
+        const relativePath = path.relative(
+          process.env.UPLOAD_PATH || 'uploads', 
+          file.path
+        ).replace(/\\/g, '/'); // Replace backslashes with forward slashes for consistency
+        
+        return relativePath;
+      }) : [];
+      
+      // Store the car directory name for future reference
+      const carDirName = req.carDirName;
+
+      const car = await Car.create({
+        ...req.body,
+        photos,
+        carDirName // Save the directory name in the car document
+      });
+
+      res.status(201).json({
+        status: 'success',
+        data: {
+          car
+        }
+      });
+    });
+  } catch (error) {
+    res.status(400).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// Get all cars
+exports.getAllCars = async (req, res) => {
+  try {
+    // Get query parameters
+    const { showAll } = req.query;
+    
+    // Build query - Only show cars with stock > 0 unless showAll=true
+    let query = {};
+    
+    if (showAll !== 'true') {
+      query = { 
+        stock: { $gt: 0 },
+        availability: true
+      };
+    }
+    
+    const cars = await Car.find(query);
+    
+    res.status(200).json({
+      status: 'success',
+      results: cars.length,
+      data: {
+        cars
+      }
+    });
+  } catch (error) {
+    res.status(400).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// Get a single car
+exports.getCar = async (req, res) => {
+  try {
+    // Validate ObjectId format first to avoid MongoDB errors
+    const id = req.params.id;
+    
+    console.log('Fetching car with ID:', id);
+    
+    if (!mongoose.isValidObjectId(id)) {
+      console.error('Invalid ObjectId format:', id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid car ID format'
+      });
+    }
+    
+    const car = await Car.findById(id);
+    if (!car) {
+      console.error('Car not found with ID:', id);
+      return res.status(404).json({
+        status: 'error',
+        message: 'Car not found'
+      });
+    }
+    
+    console.log('Car found:', car.name);
+    res.status(200).json({
+      status: 'success',
+      data: {
+        car
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching car:', error.message);
+    res.status(400).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// Update a car
+exports.updateCar = async (req, res) => {
+  try {
+    // Validate ObjectId format first
+    const id = req.params.id;
+    console.log('Updating car with ID:', id);
+    
+    if (!mongoose.isValidObjectId(id)) {
+      console.error('Invalid ObjectId format:', id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid car ID format'
+      });
+    }
+    
+    upload(req, res, async function(err) {
+      if (err instanceof multer.MulterError) {
+        console.error('Multer error:', err.message);
+        return res.status(400).json({
+          status: 'error',
+          message: err.message
+        });
+      } else if (err) {
+        console.error('Upload error:', err.message);
+        return res.status(400).json({
+          status: 'error',
+          message: err.message
+        });
+      }
+
+      console.log('Finding car with ID:', id);
+      const car = await Car.findById(id);
+      if (!car) {
+        console.error('Car not found with ID:', id);
+        return res.status(404).json({
+          status: 'error',
+          message: 'Car not found'
+        });
+      }
+
+      console.log('Car found for update:', car.name);
+      // Get new photos if uploaded
+      const newPhotos = req.files ? req.files.map(file => {
+        // Store relative path instead of absolute path
+        const relativePath = path.relative(
+          process.env.UPLOAD_PATH || 'uploads', 
+          file.path
+        ).replace(/\\/g, '/'); // Replace backslashes with forward slashes for consistency
+        
+        return relativePath;
+      }) : [];
+      
+      // Combine existing photos with new ones if not replacing
+      const photos = req.body.replacePhotos ? newPhotos : [...car.photos, ...newPhotos];
+      
+      // Update the car directory name if we're replacing photos
+      const carDirName = req.body.replacePhotos ? req.carDirName : car.carDirName;
+
+      console.log('Request body for update:', req.body);
+      
+      // Update car - ensure we convert string ID to ObjectId
+      const updatedCar = await Car.findByIdAndUpdate(
+        id,
+        {
+          ...req.body,
+          photos,
+          carDirName: req.body.replacePhotos ? req.carDirName : car.carDirName
+        },
+        {
+          new: true,
+          runValidators: true
+        }
+      );
+
+      console.log('Car updated successfully:', updatedCar.name);
+      res.status(200).json({
+        status: 'success',
+        data: {
+          car: updatedCar
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Error updating car:', error.message);
+    res.status(400).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// Delete a car
+exports.deleteCar = async (req, res) => {
+  try {
+    // Validate ObjectId format first
+    const id = req.params.id;
+    console.log('Deleting car with ID:', id);
+    
+    if (!mongoose.isValidObjectId(id)) {
+      console.error('Invalid ObjectId format:', id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid car ID format'
+      });
+    }
+    
+    const car = await Car.findById(id);
+    if (!car) {
+      console.error('Car not found with ID:', id);
+      return res.status(404).json({
+        status: 'error',
+        message: 'Car not found'
+      });
+    }
+
+    // Delete photos from storage
+    car.photos.forEach(photo => {
+      const fullPath = path.join(process.env.UPLOAD_PATH || 'uploads', photo);
+      if (fs.existsSync(fullPath)) {
+        fs.unlinkSync(fullPath);
+      }
+    });
+    
+    // Delete the car directory if it exists
+    if (car.carDirName) {
+      const carDirPath = path.join(process.env.UPLOAD_PATH || 'uploads', car.carDirName);
+      if (fs.existsSync(carDirPath)) {
+        try {
+          // Check if directory is empty first
+          const files = fs.readdirSync(carDirPath);
+          if (files.length === 0) {
+            fs.rmdirSync(carDirPath);
+          }
+        } catch (err) {
+          console.error('Error deleting car directory:', err);
+        }
+      }
+    }
+
+    // Use deleteOne instead of deprecated remove()
+    await Car.deleteOne({ _id: id });
+    
+    console.log('Car deleted successfully:', car.name);
+    res.status(204).json({
+      status: 'success',
+      data: null
+    });
+  } catch (error) {
+    console.error('Error deleting car:', error.message);
+    res.status(400).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
+
+// Toggle car availability
+exports.toggleAvailability = async (req, res) => {
+  try {
+    // Validate ObjectId format first
+    const id = req.params.id;
+    console.log('Toggling availability for car with ID:', id);
+    
+    if (!mongoose.isValidObjectId(id)) {
+      console.error('Invalid ObjectId format:', id);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid car ID format'
+      });
+    }
+    
+    const car = await Car.findById(id);
+    if (!car) {
+      console.error('Car not found with ID:', id);
+      return res.status(404).json({
+        status: 'error',
+        message: 'Car not found'
+      });
+    }
+
+    car.availability = !car.availability;
+    await car.save();
+
+    console.log('Car availability toggled successfully:', car.name, 'Available:', car.availability);
+    res.status(200).json({
+      status: 'success',
+      data: {
+        car
+      }
+    });
+  } catch (error) {
+    console.error('Error toggling car availability:', error.message);
+    res.status(400).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+};
