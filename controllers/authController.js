@@ -90,8 +90,28 @@ const sendPasswordResetEmail = async (user, token) => {
 
 // Signup controller
 exports.signup = async (req, res) => {
+  // Set CORS headers explicitly for this route
+  res.header('Access-Control-Allow-Origin', 'https://moementrabelsi.github.io');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+
+  // Handle OPTIONS request for preflight
+  if (req.method === 'OPTIONS') {
+    return res.status(200).send();
+  }
+
   try {
+    console.log('Signup request received:', req.body);
     const { name, email, password, phone, address } = req.body;
+
+    // Validate required fields
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Please provide name, email and password'
+      });
+    }
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -103,30 +123,46 @@ exports.signup = async (req, res) => {
     }
 
     // Create new user
-    const user = await User.create({
+    const user = new User({
       name,
       email,
       password,
-      phone,
-      address
+      phone: phone || '',
+      address: address || ''
     });
 
-    // Generate verification token and send email
-    const verificationToken = user.createEmailVerificationToken();
+    // Save user to database
     await user.save();
-    await sendVerificationEmail(user, verificationToken);
+    
+    try {
+      // Generate verification token and send email
+      const verificationToken = user.createEmailVerificationToken();
+      await user.save({ validateBeforeSave: false });
+      await sendVerificationEmail(user, verificationToken);
+    } catch (emailError) {
+      console.error('Email sending error:', emailError);
+      // Continue even if email fails - don't block registration
+    }
+
+    // Create token for immediate login
+    const token = generateToken(user._id, user.role);
 
     // Remove password from response
     user.password = undefined;
 
     res.status(201).json({
       status: 'success',
-      message: 'Please check your email to verify your account'
+      message: 'Account created successfully. Please check your email to verify your account.',
+      token,
+      data: {
+        user
+      }
     });
   } catch (error) {
+    console.error('Signup error:', error);
     res.status(400).json({
       status: 'error',
-      message: error.message
+      message: error.message || 'An error occurred during signup'
     });
   }
 };
