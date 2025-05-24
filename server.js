@@ -22,13 +22,24 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: [
-    'http://localhost:4200',
-    'https://moementrabelsi.github.io'
-  ],
+  origin: ['http://localhost:4200', 'https://moementrabelsi.github.io'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// Handle preflight requests for all routes
+app.options('*', cors());
+
+// Set custom headers for all responses to handle CORS issues
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://moementrabelsi.github.io');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
